@@ -788,6 +788,48 @@ fn replace_brs_in_content(content: &str) -> String {
     }
 }
 
+/// Prepare document for readability processing
+///
+/// This function implements Mozilla's _prepDocument functionality:
+/// - Remove script and style elements
+/// - Replace font tags with span
+/// - Unwrap noscript tags to reveal lazy-loaded images
+/// - Remove form elements
+///
+/// This should be called BEFORE content extraction
+pub fn prep_document(html: &str) -> String {
+    let mut html = html.to_string();
+
+    let script_regex = regex::Regex::new(r"(?i)<script\b[^>]*>[\s\S]*?</script>").unwrap();
+    html = script_regex.replace_all(&html, "").to_string();
+
+    let style_regex = regex::Regex::new(r"(?i)<style\b[^>]*>[\s\S]*?</style>").unwrap();
+    html = style_regex.replace_all(&html, "").to_string();
+
+    let font_open_regex = regex::Regex::new(r"<font\b").unwrap();
+    html = font_open_regex.replace_all(&html, "<span").to_string();
+
+    let font_close_regex = regex::Regex::new(r"</font>").unwrap();
+    html = font_close_regex.replace_all(&html, "</span>").to_string();
+
+    let noscript_regex = regex::Regex::new(r"(?is)<noscript\b[^>]*>(.*?)</noscript>").unwrap();
+    html = noscript_regex
+        .replace_all(&html, |caps: &regex::Captures| {
+            let inner = &caps[1];
+            if inner.contains("<img") {
+                inner.to_string()
+            } else {
+                caps[0].to_string()
+            }
+        })
+        .to_string();
+
+    let form_regex = regex::Regex::new(r"(?i)<form\b[^>]*>[\s\S]*?</form>").unwrap();
+    html = form_regex.replace_all(&html, "").to_string();
+
+    html
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

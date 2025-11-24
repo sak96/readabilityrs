@@ -14,8 +14,11 @@ use scraper::{ElementRef, Html, Selector};
 
 /// The main Readability parser
 pub struct Readability {
-    /// The HTML document being parsed
+    /// The HTML document being parsed (raw, for metadata extraction)
     document: Html,
+
+    /// Original HTML string (stored for preprocessing before content extraction)
+    html: String,
 
     /// Base URL for resolving relative links
     base_url: Option<String>,
@@ -38,12 +41,8 @@ impl Readability {
     /// # Returns
     /// Result containing the Readability instance or an error
     pub fn new(html: &str, url: Option<&str>, options: Option<ReadabilityOptions>) -> Result<Self> {
-        // Preprocess the document (remove scripts, unwrap noscript, etc.)
-        // This matches Mozilla's _prepDocument functionality
-        // TODO: Temporarily disabled to verify impact on pass rate
-        // let preprocessed_html = cleaner::prep_document(html);
-        // let document = Html::parse_document(&preprocessed_html);
-
+        // Parse raw HTML for metadata extraction
+        // Preprocessing happens later in parse() before content extraction
         let document = Html::parse_document(html);
 
         // Validate base URL if provided
@@ -61,6 +60,7 @@ impl Readability {
 
         Ok(Self {
             document,
+            html: html.to_string(),
             base_url,
             options,
             metadata: Metadata::default(),
@@ -80,7 +80,10 @@ impl Readability {
 
         self.metadata = get_article_metadata(&self.document, json_ld);
 
-        match grab_article(&self.document, &self.options) {
+        let preprocessed_html = cleaner::prep_document(&self.html);
+        let preprocessed_doc = Html::parse_document(&preprocessed_html);
+
+        match grab_article(&preprocessed_doc, &self.options) {
             Ok(Some(content_html)) => {
                 let cleaned_wrapper_html =
                     cleaner::clean_article_content_light(&content_html, self.base_url.as_deref())
