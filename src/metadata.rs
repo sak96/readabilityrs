@@ -28,6 +28,7 @@ pub fn get_json_ld(document: &Html) -> Metadata {
     let mut metadata = Metadata::default();
 
     let script_selector = Selector::parse("script[type='application/ld+json']").unwrap();
+    let schema_regex = regex::Regex::new(r"^https?://schema\.org/?$").unwrap();
 
     for script in document.select(&script_selector) {
         let content = script.text().collect::<String>();
@@ -56,7 +57,6 @@ pub fn get_json_ld(document: &Html) -> Metadata {
             }
 
             // Check for schema.org context
-            let schema_regex = regex::Regex::new(r"^https?://schema\.org/?$").unwrap();
             let has_schema_context = if let Some(context) = parsed.get("@context") {
                 if let Some(ctx_str) = context.as_str() {
                     schema_regex.is_match(ctx_str)
@@ -227,19 +227,21 @@ pub fn get_article_metadata(document: &Html, json_ld: Metadata) -> Metadata {
         }
     }
 
-    let mut metadata = Metadata::default();
-    metadata.title = json_ld.title.or_else(|| {
-        values
-            .get("dc:title")
-            .or_else(|| values.get("dcterm:title"))
-            .or_else(|| values.get("og:title"))
-            .or_else(|| values.get("weibo:article:title"))
-            .or_else(|| values.get("weibo:webpage:title"))
-            .or_else(|| values.get("title"))
-            .or_else(|| values.get("twitter:title"))
-            .or_else(|| values.get("parsely-title"))
-            .cloned()
-    });
+    let mut metadata = Metadata {
+        title: json_ld.title.or_else(|| {
+            values
+                .get("dc:title")
+                .or_else(|| values.get("dcterm:title"))
+                .or_else(|| values.get("og:title"))
+                .or_else(|| values.get("weibo:article:title"))
+                .or_else(|| values.get("weibo:webpage:title"))
+                .or_else(|| values.get("title"))
+                .or_else(|| values.get("twitter:title"))
+                .or_else(|| values.get("parsely-title"))
+                .cloned()
+        }),
+        ..Default::default()
+    };
 
     if metadata.title.is_none() {
         metadata.title = extract_title_from_document(document);

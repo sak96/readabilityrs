@@ -48,7 +48,8 @@ fn decode_html_entity(entity: &str) -> Option<String> {
                     .map(|c| c.to_string())
             } else if entity.starts_with("&#") && entity.ends_with(';') {
                 let digits = entity.get(2..entity.len() - 1)?;
-                u32::from_str_radix(digits, 10)
+                digits
+                    .parse::<u32>()
                     .ok()
                     .and_then(std::char::from_u32)
                     .map(|c| c.to_string())

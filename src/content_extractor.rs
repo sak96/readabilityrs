@@ -438,9 +438,7 @@ fn promote_dense_wrapper_child(
     scores: &HashMap<String, f64>,
     sorted_scores: &[(&String, &f64)],
 ) -> Option<String> {
-    let Some(best_elem) = find_element_by_id(document, best_id) else {
-        return None;
-    };
+    let best_elem = find_element_by_id(document, best_id)?;
 
     let tag = best_elem.value().name().to_uppercase();
     if matches!(tag.as_str(), "ARTICLE" | "SECTION" | "MAIN") {
@@ -530,9 +528,7 @@ fn promote_semantic_descendant(
         return None;
     }
 
-    let Some(best_elem) = find_element_by_id(document, best_id) else {
-        return None;
-    };
+    let best_elem = find_element_by_id(document, best_id)?;
 
     let class_id = format!(
         "{} {}",
@@ -682,9 +678,9 @@ fn extract_article_content(
             };
 
             let weighted_sibling_score = sibling_score + class_bonus;
-            if weighted_sibling_score >= sibling_score_threshold {
-                true
-            } else if is_good_sibling_paragraph(sibling) {
+            if weighted_sibling_score >= sibling_score_threshold
+                || is_good_sibling_paragraph(sibling)
+            {
                 true
             } else {
                 should_keep_block_element(sibling, best_score)
