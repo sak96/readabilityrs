@@ -248,17 +248,63 @@ fn clean_styles(html: &str) -> String {
 /// This function:
 /// - Removes excessive blank lines (more than 2 consecutive newlines)
 /// - Collapses multiple spaces into single spaces
+///
+/// Importantly, whitespace inside `<pre>` blocks is preserved as-is
+/// to maintain code indentation.
 fn normalize_whitespace(html: &str) -> String {
     // Multiple consecutive newlines -> 2 newlines (fast single pass)
-    static MULTI_NEWLINE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"\n{3,}").unwrap());
+    static MULTI_NEWLINE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\n{3,}").unwrap());
     // Multiple spaces -> single space
-    static MULTI_SPACE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r" {2,}").unwrap());
+    static MULTI_SPACE: Lazy<Regex> = Lazy::new(|| Regex::new(r" {2,}").unwrap());
+    // Match <pre>...</pre> blocks (including attributes on opening tag)
+    static PRE_BLOCK: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?is)<pre\b[^>]*>.*?</pre>").unwrap());
+    // Match standalone <code>...</code> blocks (not nested inside <pre>)
+    static CODE_BLOCK: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"(?is)<code\b[^>]*>.*?</code>").unwrap());
 
-    let result = MULTI_NEWLINE.replace_all(html, "\n\n");
-    let result = MULTI_SPACE.replace_all(&result, " ");
-    result.to_string()
+    // Extract <pre> blocks as placeholders FIRST, before any collapsing
+    let mut pre_blocks: Vec<String> = Vec::new();
+    let mut with_placeholders = html.to_string();
+
+    for cap in PRE_BLOCK.captures_iter(&with_placeholders.clone()) {
+        let full_match = cap.get(0).unwrap().as_str();
+        let placeholder = format!("\x00PRE_BLOCK_{}\x00", pre_blocks.len());
+        pre_blocks.push(full_match.to_string());
+        with_placeholders = with_placeholders.replacen(full_match, &placeholder, 1);
+    }
+
+    // Extract <code> blocks as placeholders (standalone, not inside <pre>)
+    let mut code_blocks: Vec<String> = Vec::new();
+    for cap in CODE_BLOCK.captures_iter(&with_placeholders.clone()) {
+        let full_match = cap.get(0).unwrap().as_str();
+        // Skip if this is already a placeholder (i.e., was inside a <pre>)
+        if full_match.starts_with('\x00') {
+            continue;
+        }
+        let placeholder = format!("\x00CODE_BLOCK_{}\x00", code_blocks.len());
+        code_blocks.push(full_match.to_string());
+        with_placeholders = with_placeholders.replacen(full_match, &placeholder, 1);
+    }
+
+    // Apply collapsing only outside <pre> and <code> blocks
+    let result = MULTI_NEWLINE.replace_all(&with_placeholders, "\n\n");
+    let collapsed = MULTI_SPACE.replace_all(&result, " ");
+
+    // Restore <code> blocks
+    let mut final_result = collapsed.to_string();
+    for (i, block) in code_blocks.iter().enumerate() {
+        let placeholder = format!("\x00CODE_BLOCK_{}\x00", i);
+        final_result = final_result.replace(&placeholder, block);
+    }
+
+    // Restore <pre> blocks
+    for (i, block) in pre_blocks.iter().enumerate() {
+        let placeholder = format!("\x00PRE_BLOCK_{}\x00", i);
+        final_result = final_result.replace(&placeholder, block);
+    }
+
+    final_result
 }
 
 /// Remove unwanted elements that are never part of article content
@@ -360,12 +406,15 @@ fn remove_empty_paragraphs(html: &str) -> String {
         Lazy::new(|| Regex::new(r"(?i)<p[^>]*>\s*<span[^>]*>\s*</span>\s*</p>").unwrap());
 
     // Match paragraphs that contain only <span><br></span> (common in Blogger)
-    static BR_SPAN_P_REGEX: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"(?i)<p[^>]*>\s*<span[^>]*>\s*<br\s*/?>\s*</span>\s*</p>").unwrap());
+    static BR_SPAN_P_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)<p[^>]*>\s*<span[^>]*>\s*<br\s*/?>\s*</span>\s*</p>").unwrap()
+    });
 
     // Match orphaned <br> tags between block elements (not inside paragraphs)
-    static ORPHAN_BR_REGEX: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"(?i)(</(?:p|div|h[1-6])>)\s*(?:<br\s*/?>[\s\n]*)+\s*(<(?:p|div|h[1-6]))").unwrap());
+    static ORPHAN_BR_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)(</(?:p|div|h[1-6])>)\s*(?:<br\s*/?>[\s\n]*)+\s*(<(?:p|div|h[1-6]))")
+            .unwrap()
+    });
 
     let mut html = html.to_string();
 
@@ -641,5 +690,85 @@ mod tests {
         assert!(cleaned.contains("<header>"));
         assert!(cleaned.contains("By Author"));
         assert!(cleaned.contains("<p>Content</p>"));
+    }
+
+    #[test]
+    fn test_normalize_whitespace_preserves_pre_indentation() {
+        let input = r#"<pre><code>fn main() {
+    let x = 1;
+    if x > 0 {
+        println!("positive");
+    }
+}</code></pre>"#;
+
+        let result = normalize_whitespace(input);
+
+        assert!(
+            result.contains("    let x = 1;"),
+            "4-space indentation should be preserved inside <pre>: {}",
+            result
+        );
+        assert!(
+            result.contains("        println!(\"positive\");"),
+            "8-space indentation should be preserved inside <pre>: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_whitespace_collapses_outside_pre() {
+        let input = r#"<p>Some    text    with   extra   spaces.</p><pre><code>    indented code</code></pre>"#;
+
+        let result = normalize_whitespace(input);
+
+        // Spaces outside <pre> should be collapsed
+        assert!(
+            !result.contains("Some    text"),
+            "spaces outside <pre> should be collapsed: {}",
+            result
+        );
+        assert!(
+            result.contains("Some text with extra spaces."),
+            "text outside <pre> should have single spaces: {}",
+            result
+        );
+        // Indentation inside <pre> should be preserved
+        assert!(
+            result.contains("    indented code"),
+            "4-space indentation inside <pre> should be preserved: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_whitespace_preserves_multiple_pre_blocks() {
+        let input = r#"<p>Text</p><pre><code>    first block</code></pre><p>More text</p><pre><code>    second block</code></pre>"#;
+
+        let result = normalize_whitespace(input);
+
+        assert!(
+            result.contains("    first block"),
+            "first pre block indentation preserved: {}",
+            result
+        );
+        assert!(
+            result.contains("    second block"),
+            "second pre block indentation preserved: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_normalize_whitespace_preserves_pre_with_attributes() {
+        let input = r#"<pre tabindex="0" class="chroma"><code class="language-python">    def hello():
+        pass</code></pre>"#;
+
+        let result = normalize_whitespace(input);
+
+        assert!(
+            result.contains("    def hello():"),
+            "indentation inside pre with attributes should be preserved: {}",
+            result
+        );
     }
 }
